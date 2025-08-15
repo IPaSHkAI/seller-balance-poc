@@ -68,6 +68,3 @@
 - Добавить метрики в Prometheus/Grafana и алерты на DQ.
 - Написать unit-тесты трансформаций (pytest) и CI/CD через GitHub Actions.
 
----
-
-Сделано: 2025-08-15 18:40 UTC.
