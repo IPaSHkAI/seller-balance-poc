@@ -8,10 +8,11 @@ services:
     volumes:
       - ./sql/clickhouse_raw_ddl.sql:/docker-entrypoint-initdb.d/01_raw_ddl.sql:ro
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      test: ["CMD", "clickhouse-client", "--query", "SELECT 1"]
       interval: 5s
       timeout: 5s
       retries: 20
+      start_period: 10s
 
   airflow:
     build: ./airflow
