@@ -1,70 +1,104 @@
+# Seller Balance Pipeline
 
-# Seller Balance PoC (ETL → DWH → DQ)
+ETL → dbt → DWH → DQ → Airflow: сквозной пайплайн пересчёта финансового баланса продавцов
+маркетплейса на ClickHouse, с идемпотентной загрузкой, реальными проверками качества данных
+и CI, который гоняет всё это на настоящем ClickHouse при каждом пуше.
 
-Мини-проект показывает, как собирать события по продавцам в единый финансовый баланс, строить дневные агрегаты и базовые DQ-проверки.
+Раньше это был скелет-PoC: DQ-проверка была функцией-заглушкой, которая просто печатала
+"Run DQ checks..." и всегда возвращала успех, загрузка не была идемпотентной, тестов и CI не
+было вовсе. Ниже — как это выглядит сейчас и почему сделано именно так (см. также
+[docs/decisions.md](docs/decisions.md) — там подробно про trade-off'ы).
 
-## Что внутри
-- `data/events.csv` — синтетический датасет событий (orders/payouts/refunds/fees) на 14 дней для 10 продавцов.
-- `sql/clickhouse_*.sql` — схемы и трансформации для ClickHouse.
-- `sql/greenplum_*.sql` — схемы и трансформации для Greenplum/PostgreSQL.
-- `airflow/dags/seller_balance_dag.py` — пример DAG для ежедневной загрузки и агрегации.
-- `src/etl.py` — мини-скрипт валидации входных данных.
+## Проблема
+У маркетплейса есть события по продавцам: заказы, выплаты, возвраты, комиссии. Нужно ежедневно
+пересчитывать баланс каждого продавца (сколько пришло, сколько ушло, накопительный итог) для
+финансовой отчётности — быстро, идемпотентно (повторный запуск не должен всё сломать) и с
+гарантией, что в витрину не попадут битые данные.
 
 ## Архитектура
 
-Ниже — схема, показывающая, как данные проходят через пайплайн от исходных событий до аналитической витрины и BI-инструментов.
+```mermaid
+flowchart LR
+    A["Event sources\norders / payouts / refunds / fees"] --> B["Airflow: load_raw_events\nидемпотентно, delete+insert по дате"]
+    B --> C[("ClickHouse\nraw.events")]
+    C --> D["Airflow: dq_checks_raw\nnull / dup / outliers, падает при нарушении"]
+    D --> E["dbt run\nstg_events -> seller_balance_daily"]
+    E --> F[("ClickHouse\ndwh.seller_balance_daily")]
+    D -.-> G["dbt test\nschema + сверка net_change = inflow - outflow"]
+    E --> G
+    G --> H["BI / аналитика\nлюбой инструмент поверх ClickHouse"]
+```
 
-![Seller Balance Architecture](seller_balance_architecture.png)
+## Технологический стек
+Python · Airflow · dbt (dbt-clickhouse) · ClickHouse · Docker Compose · pytest · GitHub Actions
 
-**Поток данных:**
-1. **Event Sources** — исходные события (заказы, выплаты, возвраты, комиссии).
-2. **Raw Layer (`raw.events`)** — загрузка необработанных данных в хранилище.
-3. **DWH Layer (`seller_balance_daily`)** — дневные агрегаты по притоку/оттоку и расчёт баланса.
-4. **DQ Checks** — базовые проверки качества данных: дубликаты, null-значения, аномалии по суммам.
-5. **Dashboard / BI** — визуализация в Metabase, Power BI или другом инструменте.
+## Что внутри
+```
+data_generator/   параметризованный генератор синтетических событий (можно включить "грязные" строки)
+pipeline/loader.py    общая логика идемпотентной загрузки в ClickHouse (переиспользуется DAG и CI)
+dq/checks.py      реальные построчные DQ-проверки с порогами, поднимает исключение при нарушении
+dbt/              staging + marts модели, schema-тесты, singular-тест на сверку баланса
+airflow/dags/     DAG: load_raw_events -> dq_checks_raw -> dbt_run -> dbt_test
+sql/              DDL raw-слоя; sql/legacy_greenplum — референсная версия под Postgres/Greenplum
+tests/            pytest для DQ-модуля
+.github/workflows/ci.yml   lint + unit-тесты + dbt run/test против настоящего ClickHouse
+```
 
-Такой дизайн позволяет легко расширять пайплайн: добавлять новые источники, усложнять трансформации, внедрять near-real-time ingestion и интегрировать с ML feature store.
+## Как запустить локально
+Нужен только Docker.
 
-## Как протестировать быстро (без ClickHouse/Greenplum)
-1. Открой `src/etl.py` и запусти:
-   ```bash
-   python src/etl.py
-   ```
-   Увидишь статистику и базовую валидацию.
-2. Посмотри SQL-трансформации (ClickHouse/Greenplum) — они готовы к запуску в реальной среде.
+```bash
+make up          # поднимает ClickHouse + Airflow
+make data         # генерирует свежие синтетические данные в data/events.csv
+```
 
-## Как прогнать в ClickHouse (локально)
-1. Подними ClickHouse (docker или локально).
-2. Выполни:
-   ```bash
-   clickhouse-client --multiquery < sql/clickhouse_schema.sql
-   cat data/events.csv | clickhouse-client --query="INSERT INTO raw.events FORMAT CSVWithNames"
-   clickhouse-client --multiquery < sql/clickhouse_transforms.sql
-   clickhouse-client --multiquery < sql/clickhouse_dq.sql
-   ```
+Дальше:
+- Airflow UI: http://localhost:8080 (admin/admin) — запусти DAG `seller_balance_daily` вручную
+  (Trigger DAG) или дождись расписания (`@daily`).
+- ClickHouse: http://localhost:8123 — таблицы `raw.events` и `dwh.seller_balance_daily`.
 
-## Как прогнать в Greenplum/Postgres
-1. Создай схемы и таблицы:
-   ```bash
-   psql -f sql/greenplum_schema.sql
-   ```
-2. Загрузись из CSV:
-   ```bash
-   \copy raw.events FROM 'data/events.csv' WITH (FORMAT csv, HEADER true);
-   ```
-3. Применяй трансформации и базовые DQ:
-   ```bash
-   psql -f sql/greenplum_transforms.sql
-   psql -f sql/greenplum_dq.sql
-   ```
+Без Airflow, только пайплайн трансформаций:
+```bash
+python scripts/load_all.py --csv data/events.csv   # грузит всё разом (не по дате исполнения)
+make dbt-run
+make dbt-test
+```
 
-## Airflow (скелет)
-- Помести папку в `dags/` Airflow и убедись, что `clickhouse-client` доступен контейнеру.
-- DAG: `seller_balance_daily` — шаги: загрузка raw → агрегации → DQ.
+Проверить DQ-модуль отдельно (без Docker вообще):
+```bash
+make test         # pytest по dq/checks.py
+make dq-run       # прогнать проверки на data/events.csv и увидеть отчёт в консоли
+```
 
-## Идеи для расширения
-- Добавить feature store для ML (например, витрина последних N дней по продавцу).
-- Подключить Kafka-стрим (producer → raw.events) и заменить batch на near-real-time ingestion.
-- Добавить метрики в Prometheus/Grafana и алерты на DQ.
-- Написать unit-тесты трансформаций (pytest) и CI/CD через GitHub Actions.
+## Демонстрация: DQ действительно ловит битые данные
+Генератор умеет намеренно портить часть строк (`--dirty-fraction`), чтобы было на чём проверять DQ:
 
+```bash
+python data_generator/generate_events.py --sellers 10 --days 14 --seed 42 \
+    --dirty-fraction 0.02 --out data/events_dirty.csv
+PYTHONPATH=. python dq/checks.py data/events_dirty.csv
+```
+
+На прогоне с `--dirty-fraction 0.02` (683 строки) отчёт реально находит внесённые проблемы:
+
+```
+DQ report: 683 rows checked
+  [FAIL (error)] required_fields_not_null: 3 строк с null/пустыми значениями
+  [FAIL (error)] unique_event_id: 10 строк с повторяющимся event_id
+  [FAIL (error)] amount_within_range: 5 строк с amount вне диапазона
+  [OK] categorical_domains: 0 строк с неожиданным event_type/direction
+  [FAIL (error)] error_row_rate: доля строк с ошибками 2.64% (порог 2%)
+```
+На чистом датасете (`--dirty-fraction 0`, по умолчанию) все проверки проходят.
+
+## CI
+На каждый push/PR (`.github/workflows/ci.yml`):
+1. `ruff check` + `pytest` для DQ-модуля;
+2. поднимается настоящий ClickHouse (service container), генерируются данные, применяется DDL,
+   гоняются `dbt run` и `dbt test`;
+3. синтаксическая проверка DAG-файла.
+
+## Ограничения и что дальше
+См. [docs/decisions.md](docs/decisions.md) — там расписано, что изменилось бы при росте нагрузки
+(near-real-time приём через Kafka/CDC, incremental-пересчёт баланса с opening balance, реальный
+алертинг вместо лог-стаба, метрики DQ в Prometheus/Grafana).

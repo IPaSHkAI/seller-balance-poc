@@ -1,0 +1,21 @@
+version: 2
+
+models:
+  - name: stg_events
+    description: "Очищенные и дедуплицированные события (staging layer)"
+    columns:
+      - name: event_id
+        tests:
+          - not_null
+          - unique
+      - name: seller_id
+        tests:
+          - not_null
+      - name: event_type
+        tests:
+          - accepted_values:
+              values: ['order', 'payout', 'refund', 'fee']
+      - name: direction
+        tests:
+          - accepted_values:
+              values: ['in', 'out']

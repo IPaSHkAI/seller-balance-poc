@@ -1,0 +1,18 @@
+# Пример profiles.yml для локального запуска / CI.
+# Скопируй в ~/.dbt/profiles.yml (или укажи DBT_PROFILES_DIR=dbt) и подставь свои значения,
+# либо задай переменные окружения — в CI используются именно они (см. .github/workflows/ci.yml).
+#
+# Пароль/хост НИКОГДА не хранится в git — только через переменные окружения.
+
+seller_balance:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: clickhouse
+      schema: dwh
+      host: "{{ env_var('CLICKHOUSE_HOST', 'localhost') }}"
+      port: "{{ env_var('CLICKHOUSE_PORT', '8123') | as_number }}"
+      user: "{{ env_var('CLICKHOUSE_USER', 'default') }}"
+      password: "{{ env_var('CLICKHOUSE_PASSWORD', '') }}"
+      secure: false
+      threads: 2

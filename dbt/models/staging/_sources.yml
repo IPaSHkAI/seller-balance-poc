@@ -1,0 +1,27 @@
+version: 2
+
+sources:
+  - name: raw
+    schema: raw
+    description: >
+      Сырые события продавцов (orders/payouts/refunds/fees).
+      Загружаются задачей load_raw_events в Airflow DAG до запуска dbt —
+      dbt эту таблицу не создаёт и не наполняет, только читает.
+    tables:
+      - name: events
+        description: "Одно событие = одна финансовая операция по продавцу"
+        columns:
+          - name: event_id
+            description: "Уникальный идентификатор события"
+          - name: event_ts
+            description: "Момент события (UTC)"
+          - name: seller_id
+            description: "Идентификатор продавца"
+          - name: event_type
+            description: "order | payout | refund | fee"
+          - name: amount
+            description: "Абсолютная сумма операции"
+          - name: signed_amount
+            description: "Сумма со знаком: + для притока, - для оттока"
+          - name: direction
+            description: "in | out"

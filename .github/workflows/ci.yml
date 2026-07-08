@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  lint-and-unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint (ruff)
+        run: ruff check .
+
+      - name: Unit tests (DQ module)
+        run: PYTHONPATH=. pytest tests/ -v
+
+  dbt-clickhouse:
+    runs-on: ubuntu-latest
+    needs: lint-and-unit-tests
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:24.3-alpine
+        ports:
+          - 8123:8123
+          - 9000:9000
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:8123/ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install clickhouse-connect==0.7.19 dbt-core==1.8.0 dbt-clickhouse==1.8.1
+
+      - name: Generate sample dataset
+        run: python data_generator/generate_events.py --sellers 15 --days 10 --seed 7 --out data/events.csv
+
+      - name: Apply raw DDL to ClickHouse
+        run: |
+          python - <<'PY'
+          import clickhouse_connect
+
+          client = clickhouse_connect.get_client(host="localhost", port=8123, username="default", password="")
+          with open("sql/clickhouse_raw_ddl.sql") as f:
+              ddl = f.read()
+          for statement in ddl.split(";"):
+              statement = statement.strip()
+              if statement:
+                  client.command(statement)
+          print("Raw DDL applied")
+          PY
+
+      - name: Sanity-check DQ on generated data
+        run: PYTHONPATH=. python dq/checks.py data/events.csv
+
+      - name: Load data into raw.events
+        run: python scripts/load_all.py --csv data/events.csv --host localhost --port 8123
+
+      - name: Prepare dbt profile
+        run: cp dbt/profiles.example.yml dbt/profiles.yml
+
+      - name: dbt run
+        working-directory: dbt
+        run: dbt run --profiles-dir .
+
+      - name: dbt test
+        working-directory: dbt
+        run: dbt test --profiles-dir .
+
+  dag-syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile-check DAG file
+        run: python -m py_compile airflow/dags/seller_balance_dag.py pipeline/loader.py
+      # Примечание: полноценный `airflow dags test` здесь сознательно не запускается —
+      # поднятие метабазы Airflow в CI ради синтаксической проверки одного линейного DAG
+      # не окупает время сборки. Реальный прогон DAG проверяется вручную через
+      # `make up` (см. README) и веб-интерфейс Airflow.

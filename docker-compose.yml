@@ -1,0 +1,46 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3-alpine
+    container_name: seller_balance_clickhouse
+    ports:
+      - "8123:8123"
+      - "9000:9000"
+    volumes:
+      - ./sql/clickhouse_raw_ddl.sql:/docker-entrypoint-initdb.d/01_raw_ddl.sql:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  airflow:
+    build: ./airflow
+    container_name: seller_balance_airflow
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////opt/airflow/airflow.db
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+      PYTHONPATH: /opt/airflow
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PASSWORD: ""
+      DBT_TARGET: dev
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./dbt:/opt/airflow/dbt
+      - ./dq:/opt/airflow/dq
+      - ./pipeline:/opt/airflow/pipeline
+      - ./data:/opt/airflow/data
+    command: >
+      bash -c "
+        [ -f /opt/airflow/dbt/profiles.yml ] || cp /opt/airflow/dbt/profiles.example.yml /opt/airflow/dbt/profiles.yml &&
+        airflow db migrate &&
+        (airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true) &&
+        (airflow scheduler &) &&
+        airflow webserver
+      "

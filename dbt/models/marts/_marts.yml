@@ -1,0 +1,18 @@
+version: 2
+
+models:
+  - name: seller_balance_daily
+    description: "Дневной баланс продавца: приток/отток/чистое изменение/накопительный баланс"
+    columns:
+      - name: dt
+        tests:
+          - not_null
+      - name: seller_id
+        tests:
+          - not_null
+      - name: inflow
+        tests:
+          - not_null
+      - name: outflow
+        tests:
+          - not_null
