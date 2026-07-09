@@ -1,9 +1,17 @@
+# Единое место для пароля ClickHouse: один и тот же секрет должен попасть и в
+# сам контейнер ClickHouse, и в airflow (клиенты подключаются с ним же).
+# ВАЖНО: пустая строка здесь не сработает — образ ClickHouse трактует
+# CLICKHOUSE_PASSWORD="" как "не задан" и сгенерирует случайный пароль (именно
+# так падал CI, пока это не исправили). Для локальной демки — открытый текст
+# ок; в проде это был бы секрет из vault/CI secrets, а не значение в файле.
+x-clickhouse-password: &clickhouse_password "local_dev_pw"
+
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.3-alpine
     container_name: seller_balance_clickhouse
     environment:
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_PASSWORD: *clickhouse_password
     ports:
       - "8123:8123"
       - "9000:9000"
@@ -29,7 +37,7 @@ services:
       AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       PYTHONPATH: /opt/airflow
       CLICKHOUSE_HOST: clickhouse
-      CLICKHOUSE_PASSWORD: ""
+      CLICKHOUSE_PASSWORD: *clickhouse_password
       DBT_TARGET: dev
     ports:
       - "8080:8080"
