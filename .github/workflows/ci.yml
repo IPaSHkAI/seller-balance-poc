@@ -31,6 +31,8 @@ jobs:
     services:
       clickhouse:
         image: clickhouse/clickhouse-server:24.3-alpine
+        env:
+          CLICKHOUSE_PASSWORD: ""
         ports:
           - 8123:8123
           - 9000:9000
