@@ -1,4 +1,4 @@
-.PHONY: up down logs data test dbt-run dbt-test dq-run
+.PHONY: up down logs data test dbt-run dbt-test dq-run load-all
 
 up:
 	docker compose up -d --build
@@ -29,3 +29,7 @@ dbt-test:
 # Ручной прогон DQ-проверок по локальному CSV, без ClickHouse
 dq-run:
 	PYTHONPATH=. python3 dq/checks.py data/events.csv
+
+# Полная загрузка CSV в raw.events без Airflow (для ручных прогонов / CI)
+load-all:
+	PYTHONPATH=. python3 scripts/load_all.py --csv data/events.csv --host localhost --port 8123

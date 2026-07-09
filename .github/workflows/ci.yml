@@ -91,7 +91,7 @@ jobs:
         run: PYTHONPATH=. python dq/checks.py data/events.csv
 
       - name: Load data into raw.events
-        run: python scripts/load_all.py --csv data/events.csv --host localhost --port 8123 --password "$CLICKHOUSE_PASSWORD"
+        run: PYTHONPATH=. python scripts/load_all.py --csv data/events.csv --host localhost --port 8123 --password "$CLICKHOUSE_PASSWORD"
 
       - name: Prepare dbt profile
         run: cp dbt/profiles.example.yml dbt/profiles.yml

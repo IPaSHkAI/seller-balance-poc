@@ -59,7 +59,7 @@ make data         # генерирует свежие синтетические
 
 Без Airflow, только пайплайн трансформаций:
 ```bash
-python scripts/load_all.py --csv data/events.csv   # грузит всё разом (не по дате исполнения)
+make load-all     # грузит весь CSV разом в raw.events (не по дате исполнения)
 make dbt-run
 make dbt-test
 ```
